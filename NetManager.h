@@ -22,6 +22,7 @@ class NetManager {
         ~NetManager();
         bool init();
 
+        int getTcpListenSocket();
         int getUdpSocket();
 
         // General function to support the select statement

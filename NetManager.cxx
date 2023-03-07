@@ -128,7 +128,7 @@ bool NetManager::init()
     if (res->ai_family == AF_INET6 && setsockopt(udpSocket, IPPROTO_IPV6, IPV6_V6ONLY, &opt, sizeof opt) == -1)
     {
         nerror("serverStart: setsockopt IPV6_ONLY");
-        close(tcpListenSocket);
+        close(udpSocket);
         return false;
     }
 
@@ -143,6 +143,11 @@ bool NetManager::init()
     BzfNetwork::setNonBlocking(udpSocket);
 
     return true;
+}
+
+int NetManager::getTcpListenSocket()
+{
+    return tcpListenSocket;
 }
 
 int NetManager::getUdpSocket()
