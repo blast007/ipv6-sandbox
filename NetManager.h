@@ -16,48 +16,38 @@
 /* common header */
 #include "common.h"
 
+#include <poll.h>
+#include <vector>
+#include <functional>
+
 class NetManager {
     public:
-        NetManager(const char* address, const char* port);
+        NetManager(const char* port);
         ~NetManager();
-        bool init();
 
-        int getTcpListenSocket();
-        int getUdpSocket();
+        // Bind to a new IP
+        bool bind(const char* address);
 
-        // General function to support the select statement
-        void setFd(fd_set *read_set, fd_set *write_set, int &maxFile);
-        //bool isTcpFdSet(fd_set *read_set)
-        bool isUdpFdSet(fd_set *read_set);
+        // Process network events
+        bool process();
 
-        /**
-            udpReceive will try to get the next udp message received
+        static void * get_in_addr(struct sockaddr *sa);
 
-            return the playerIndex if found, -1 when no player had an open udp
-            connection or -2 when a Ping Code Request has been detected.
-
-            buffer is the received message
-
-            uaddr is the identifier of the remote address
-
-            udpLinkRequest report if the received message is a valid udpLinkRequest
-        */
-        static int    udpReceive(char *buffer, struct sockaddr_in *uaddr,
-                                 bool &udpLinkRequest);
-
-        // Request if there is any buffered udp messages waiting to be sent
-        bool   anyUDPPending()
-        {
-            return pendingUDP;
-        };
-
+        void addAcceptCallback(std::function<void(struct sockaddr *, int)> callback);
+        void setMessageReceivedCallback(std::function<void(const char *)> callback);
     private:
-        const char* address;
+        // Port to bind all interfaces on
         const char* port;
-        int tcpListenSocket;
-        int udpSocket;
 
-        bool pendingUDP;
+        // Socket descriptor information
+        int fd_count;
+        int fd_size;
+        int numInterfaces;
+        struct pollfd *fds;
+
+        // Callbacks
+        std::vector<std::function<void(struct sockaddr *, int)>> acceptCallbacks;
+        std::function<void(const char *)> messageReceivedCallback;
 
 #if defined(_WIN32)
         const BOOL optOn = TRUE;

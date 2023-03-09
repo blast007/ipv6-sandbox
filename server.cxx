@@ -39,20 +39,7 @@
 
 bool running = true;
 
-struct pollstuff {
-        int fd_count = 0;
-        int fd_size = 5;
-        struct pollfd *pollfds;
-};
 
-// Get sockaddr, IPv4 or IPv6:
-void *get_in_addr(struct sockaddr *sa)
-{
-    if (sa->sa_family == AF_INET)
-        return &(((struct sockaddr_in*)sa)->sin_addr);
-
-    return &(((struct sockaddr_in6*)sa)->sin6_addr);
-}
 
 void terminate(int signum)
 {
@@ -60,6 +47,31 @@ void terminate(int signum)
         std::cout << std::endl;
     std::cout << "Received signal " << signum << ", shutting down" << std::endl;
     running = false;
+}
+
+// Get sockaddr, IPv4 or IPv6:
+void * get_in_addr(struct sockaddr *sa)
+{
+    if (sa->sa_family == AF_INET)
+        return &(((struct sockaddr_in*)sa)->sin_addr);
+
+    return &(((struct sockaddr_in6*)sa)->sin6_addr);
+}
+
+void acceptConnection(struct sockaddr* remoteIP, int socket)
+{
+    char ipstr[INET6_ADDRSTRLEN];
+    inet_ntop(remoteIP->sa_family, get_in_addr(remoteIP), ipstr, INET_ADDRSTRLEN);
+
+    if (remoteIP->sa_family == AF_INET)
+        std::cout << "Accepted IPv4 TCP connection from " << ipstr << " on socket " << socket << std::endl;
+    else
+        std::cout << "Accepted IPv6 TCP connection from [" << ipstr << "] on socket " << socket << std::endl;
+}
+
+void handleMessageReceived(const char *data)
+{
+    std::cout << "Received data: " << data << std::endl;
 }
 
 int main()
@@ -79,134 +91,35 @@ int main()
     // The port to use
     const char *port = "5154";
 
-    // Container for poll file descriptors
-    std::vector<pollstuff> pollstuffs;
-
-    // Create a NetManager for each interface
-    std::vector<NetManager*> netManagers;
+    // Create a NetManager and bind each interface
+    NetManager *netManager = new NetManager(port);
     for (auto &interface : interfaces)
     {
-        NetManager *manager = new NetManager(interface.c_str(), port);
-        if (manager->init())
+        if (netManager->bind(interface.c_str()))
         {
-            netManagers.push_back(manager);
-            struct pollstuff p;
-            p.pollfds = (struct pollfd*)malloc(sizeof *p.pollfds * p.fd_size);
-            p.pollfds[0].fd = manager->getTcpListenSocket();
-            p.pollfds[0].events = POLLIN;
-            p.fd_count = 1;
-            pollstuffs.push_back(p);
+            std::cout << "Listening on " << interface << " port " << port << std::endl;
+        }
+        else
+        {
+            std::cerr << "Failed to bind to " << interface << " port " << port << ": ";
+            perror("");
         }
     }
+    netManager->addAcceptCallback(acceptConnection);
+    netManager->setMessageReceivedCallback(handleMessageReceived);
 
     // Game loop
     while (running)
     {
-        //std::cout << "Server loop restart" << std::endl;
-        for (auto &p : pollstuffs)
-        {
-            int poll_count = poll(p.pollfds, p.fd_count, 50);
+        netManager->process();
 
-            // Uh oh, something went wong
-            if (poll_count == -1)
-            {
-                perror("poll");
-                return -1;
-            }
-
-            // Nothing to process, so just continue to the next pollfds if any
-            if (poll_count == 0)
-                continue;
-
-            for (int i = 0; i < p.fd_count; i++)
-            {
-                // Check if a socket is ready to read
-                if (p.pollfds[i].revents & POLLIN)
-                {
-                    // If it's out listening socket, accept the client
-                    // TODO: See if we need to match the fd with the TCP listener
-                    if (i == 0)
-                    {
-                        struct sockaddr_storage remoteIP;
-                        socklen_t remoteIPLen;
-                        int cs = accept(p.pollfds[i].fd, (struct sockaddr *)&remoteIP, &remoteIPLen);
-
-                        if (cs == -1)
-                        {
-                            perror("accept");
-                        }
-                        else
-                        {
-                            // If we are out of room, expand it a bit
-                            if (p.fd_count == p.fd_size)
-                            {
-                                p.fd_size += 10;
-                                p.pollfds = (struct pollfd*)realloc(p.pollfds, sizeof(*p.pollfds) * (p.fd_size));
-                            }
-
-                            p.pollfds[p.fd_count].fd = cs;
-                            p.pollfds[p.fd_count].events = POLLIN;
-                            p.fd_count++;
-
-                            char str[INET6_ADDRSTRLEN];
-                            inet_ntop(remoteIP.ss_family, get_in_addr((struct sockaddr*)&remoteIP), str, INET_ADDRSTRLEN);
-                            std::cout << "New TCP connection from " << str << " on socket " << cs << std::endl;
-                        }
-                    }
-
-                    // If not a listener, it's a client
-                    else
-                    {
-                        int sender_fd = p.pollfds[i].fd;
-
-                        char buf[1024] = {0};
-
-                        int nbytes = recv(sender_fd, buf, sizeof buf, 0);
-
-                        if (nbytes <= 0)
-                        {
-                            if (nbytes == 0)
-                            {
-                                std::cout << "socket " << sender_fd << " has disconnected" << std::endl;
-                            }
-                            else
-                            {
-                                perror("recv");
-                            }
-
-                            // Close the socket
-                            close(sender_fd);
-
-                            // Remove an index from the set by copying the ones from the end over this one
-                            p.pollfds[i] = p.pollfds[p.fd_count-1];
-                            p.fd_count--;
-                        }
-                        else
-                        {
-                            std::cout << "Received data: " << buf << std::endl;
-                        }
-                    }
-                }
-            }
-
-        }
         // Sleep a bit
         usleep(100000);
     }
 
-    // Delete all the pollstuff
-    for (auto &p : pollstuffs)
-    {
-        free(p.pollfds);
-        p.pollfds = nullptr;
-    }
-
-    // Shut down all the NetManagers
-    for (auto &netManager : netManagers)
-    {
-        delete netManager;
-        netManager = nullptr;
-    }
+    // Shut down NetManager
+    delete netManager;
+    netManager = nullptr;
 
     // Thanks for all the fish!
     std::cout << "Goodbye!" << std::endl;
